@@ -81,7 +81,7 @@ export GIT_REPOS_PATH=/path/to/your/git/repos
 - Use **arrow keys** or **j/k** to navigate through your projects
 - Press **Enter** to open the selected project in tmux
 - Press **?** for help
-- Press **Esc** to exit the application
+- Press **q** or **Esc** to exit the application
 
 ## Credits
 

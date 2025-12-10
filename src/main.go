@@ -18,6 +18,12 @@ var (
 	gitReposPath string
 	// Path to the log file
 	logFilePath = "/tmp/app.log"
+	// Theme colors
+	baseBackgroundColor  = tcell.NewRGBColor(6, 12, 24)
+	panelBackgroundColor = tcell.NewRGBColor(14, 24, 40)
+	accentBlueColor      = tcell.NewRGBColor(70, 130, 200)
+	highlightBlueColor   = tcell.NewRGBColor(64, 156, 255)
+	mutedTextColor       = tcell.NewRGBColor(110, 130, 150)
 )
 
 func init() {
@@ -43,6 +49,14 @@ func init() {
 
 	// Set the output of the log package to the log file
 	log.SetOutput(file)
+
+	// Apply consistent styling across primitives to mimic a professional blue theme
+	tview.Styles.PrimitiveBackgroundColor = baseBackgroundColor
+	tview.Styles.ContrastBackgroundColor = panelBackgroundColor
+	tview.Styles.MoreContrastBackgroundColor = accentBlueColor
+	tview.Styles.BorderColor = accentBlueColor
+	tview.Styles.TitleColor = highlightBlueColor
+	tview.Styles.GraphicsColor = highlightBlueColor
 }
 
 type TableItem struct {
@@ -55,6 +69,8 @@ type NaviTable struct {
 	table         *tview.Table
 	flex          *tview.Flex
 	helpBar       *tview.TextView
+	statusBar     *tview.TextView
+	pages         *tview.Pages
 	app           *tview.Application
 	items         []TableItem
 	current       int
@@ -65,9 +81,8 @@ type NaviTable struct {
 	originalFocus tview.Primitive
 }
 
-// ShowHelpModal displays a help dialog with instructions and hotkeys
-func ShowHelpModal(app *tview.Application, currentFlex *tview.Flex) *tview.Modal {
-	// Build help text with current git repos path
+// showHelpModal overlays the help content on top of the current layout
+func (nav *NaviTable) showHelpModal() {
 	helpText := fmt.Sprintf(`
 Git Opener Help
 
@@ -78,38 +93,67 @@ Navigation:
 - ↓/j: Move selection down
 - /: Search projects
 - Enter: Open selected project
-- Esc: Exit application or return to main menu from modals
+- q: Quit application
+- Esc: Exit application or return to main view
 
 Configuration:
-To change the Git Repositories Path, set the GIT_REPOS_PATH environment variable:
-  export GIT_REPOS_PATH=/path/to/your/git/repos
+export GIT_REPOS_PATH=/path/to/your/git/repos
 
 Example:
   export GIT_REPOS_PATH=$HOME/workspace/git
   ./git-opener
-
-Projects are loaded from the configured git repositories path.
 `, gitReposPath)
 
 	modal := tview.NewModal().
 		SetText(helpText).
 		AddButtons([]string{"Close"}).
 		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
-			app.SetRoot(currentFlex, true).SetFocus(currentFlex)
-			app.SetInputCapture(nil)
+			nav.pages.RemovePage("help")
+			nav.app.SetFocus(nav.flex)
+			nav.app.SetInputCapture(nil)
 		})
 
-	// Add escape key handler for help modal
-	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+	modal.SetBackgroundColor(panelBackgroundColor)
+	modal.SetTextColor(highlightBlueColor)
+	modal.SetButtonBackgroundColor(highlightBlueColor)
+	modal.SetButtonTextColor(baseBackgroundColor)
+	nav.pages.RemovePage("help")
+	nav.pages.AddPage("help", modal, true, true)
+	nav.app.SetFocus(modal)
+
+	nav.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEsc {
-			app.SetRoot(currentFlex, true).SetFocus(currentFlex)
-			app.SetInputCapture(nil)
+			nav.pages.RemovePage("help")
+			nav.app.SetFocus(nav.flex)
+			nav.app.SetInputCapture(nil)
 			return nil
 		}
 		return event
 	})
+}
 
-	return modal
+func (nav *NaviTable) dimRow(index int) {
+	if index < 0 || index >= len(nav.items) {
+		return
+	}
+	cell := nav.table.GetCell(index, 0)
+	if cell == nil {
+		return
+	}
+	cell.SetTextColor(mutedTextColor).
+		SetAttributes(tcell.AttrNone)
+}
+
+func (nav *NaviTable) highlightRow(index int) {
+	if index < 0 || index >= len(nav.items) {
+		return
+	}
+	cell := nav.table.GetCell(index, 0)
+	if cell == nil {
+		return
+	}
+	cell.SetTextColor(highlightBlueColor).
+		SetAttributes(tcell.AttrBold)
 }
 
 func (nav *NaviTable) Move(event *tcell.EventKey) *tcell.EventKey {
@@ -135,22 +179,22 @@ func (nav *NaviTable) Move(event *tcell.EventKey) *tcell.EventKey {
 		return nil
 	case tcell.KeyDown:
 		if nav.current+1 != len(nav.items) {
-			nav.table.GetCell(nav.current, 0).SetTextColor(tcell.ColorWhite)
+			nav.dimRow(nav.current)
 			nav.current++
-			nav.table.GetCell(nav.current, 0).SetTextColor(tcell.ColorRed)
+			nav.highlightRow(nav.current)
 		}
 		return nil
 	case tcell.KeyUp:
 		if nav.current != 0 {
-			nav.table.GetCell(nav.current, 0).SetTextColor(tcell.ColorWhite)
+			nav.dimRow(nav.current)
 			nav.current--
-			nav.table.GetCell(nav.current, 0).SetTextColor(tcell.ColorRed)
+			nav.highlightRow(nav.current)
 		}
 		return nil
 	}
 
 	if len(nav.items) > 0 {
-		nav.table.GetCell(nav.current, 0).SetTextColor(tcell.ColorWhite)
+		nav.dimRow(nav.current)
 	}
 
 	switch event.Rune() {
@@ -163,18 +207,19 @@ func (nav *NaviTable) Move(event *tcell.EventKey) *tcell.EventKey {
 			nav.current--
 		}
 	case '?':
-		// Show help modal when ? is pressed
-		helpModal := ShowHelpModal(nav.app, nav.flex)
-		nav.app.SetRoot(helpModal, true).SetFocus(helpModal)
+		nav.showHelpModal()
 		return nil
 	case '/':
 		// Enable search mode
 		nav.showSearchInput()
 		return nil
+	case 'q':
+		nav.app.Stop()
+		return nil
 	}
 
 	if len(nav.items) > 0 {
-		nav.table.GetCell(nav.current, 0).SetTextColor(tcell.ColorRed)
+		nav.highlightRow(nav.current)
 	}
 
 	return event
@@ -184,47 +229,49 @@ func (nav *NaviTable) Move(event *tcell.EventKey) *tcell.EventKey {
 func (nav *NaviTable) showSearchInput() {
 	// Create search input field if it doesn't exist
 	if nav.searchInput == nil {
-		nav.searchInput = tview.NewInputField().
-			SetLabel("Search: ").
+		nav.searchInput = tview.NewInputField()
+		nav.searchInput.SetLabel("Search: ").
 			SetFieldWidth(0).
-			SetDoneFunc(func(key tcell.Key) {
-				if key == tcell.KeyEnter {
-					// Directly execute the click function of the selected item
-					if len(nav.items) > 0 && nav.current < len(nav.items) {
-						// Store the click function to execute after exiting search mode
-						clickFunc := nav.items[nav.current].click
-						// Exit search mode first
-						nav.exitSearchMode()
-						// Then execute the click function
-						clickFunc()
-					} else {
-						// Just exit search mode if no items
-						nav.exitSearchMode()
-					}
-				} else if key == tcell.KeyEsc {
+			SetLabelColor(highlightBlueColor)
+		nav.searchInput.SetBackgroundColor(panelBackgroundColor)
+		nav.searchInput.SetDoneFunc(func(key tcell.Key) {
+			if key == tcell.KeyEnter {
+				// Directly execute the click function of the selected item
+				if len(nav.items) > 0 && nav.current < len(nav.items) {
+					// Store the click function to execute after exiting search mode
+					clickFunc := nav.items[nav.current].click
+					// Exit search mode first
+					nav.exitSearchMode()
+					// Then execute the click function
+					clickFunc()
+				} else {
+					// Just exit search mode if no items
 					nav.exitSearchMode()
 				}
-			}).
-			SetChangedFunc(func(text string) {
-				nav.searchText = text
-				nav.filterItems(text)
-			})
+			} else if key == tcell.KeyEsc {
+				nav.exitSearchMode()
+			}
+		})
+		nav.searchInput.SetChangedFunc(func(text string) {
+			nav.searchText = text
+			nav.filterItems(text)
+		})
 
 		// Capture specific keys on searchInput to delegate to NaviTable's navigation logic
 		nav.searchInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 			switch event.Key() {
 			case tcell.KeyDown:
 				if len(nav.items) > 0 && nav.current+1 < len(nav.items) {
-					nav.table.GetCell(nav.current, 0).SetTextColor(tcell.ColorWhite)
+					nav.dimRow(nav.current)
 					nav.current++
-					nav.table.GetCell(nav.current, 0).SetTextColor(tcell.ColorRed)
+					nav.highlightRow(nav.current)
 				}
 				return nil // handled
 			case tcell.KeyUp:
 				if len(nav.items) > 0 && nav.current > 0 {
-					nav.table.GetCell(nav.current, 0).SetTextColor(tcell.ColorWhite)
+					nav.dimRow(nav.current)
 					nav.current--
-					nav.table.GetCell(nav.current, 0).SetTextColor(tcell.ColorRed)
+					nav.highlightRow(nav.current)
 				}
 				return nil // handled
 			}
@@ -239,9 +286,11 @@ func (nav *NaviTable) showSearchInput() {
 	nav.searchText = ""
 	nav.searchInput.SetText("")
 
-	// Add search input to the flex layout
+	// Add search input to the flex layout above the status bar
 	nav.flex.RemoveItem(nav.helpBar)
+	nav.flex.RemoveItem(nav.statusBar)
 	nav.flex.AddItem(nav.searchInput, 1, 0, true)
+	nav.flex.AddItem(nav.statusBar, 1, 0, false)
 	nav.flex.AddItem(nav.helpBar, 1, 0, false)
 
 	// Focus on the search input
@@ -254,9 +303,11 @@ func (nav *NaviTable) exitSearchMode() {
 		return
 	}
 
-	// Remove search input and restore focus
+	// Remove search input and restore focus/order
 	nav.flex.RemoveItem(nav.searchInput)
+	nav.flex.RemoveItem(nav.statusBar)
 	nav.flex.RemoveItem(nav.helpBar)
+	nav.flex.AddItem(nav.statusBar, 1, 0, false)
 	nav.flex.AddItem(nav.helpBar, 1, 0, false)
 
 	// Reset search mode
@@ -295,7 +346,8 @@ func (nav *NaviTable) filterItems(searchText string) {
 			nav.items = append(nav.items, item)
 			cell := tview.NewTableCell(item.data).
 				SetAlign(tview.AlignCenter).
-				SetBackgroundColor(tcell.ColorBlack)
+				SetBackgroundColor(panelBackgroundColor).
+				SetTextColor(mutedTextColor)
 			nav.table.SetCell(len(nav.items)-1, 0, cell)
 		}
 	}
@@ -303,7 +355,7 @@ func (nav *NaviTable) filterItems(searchText string) {
 	// Reset current selection
 	nav.current = 0
 	if len(nav.items) > 0 {
-		nav.table.GetCell(0, 0).SetTextColor(tcell.ColorRed)
+		nav.highlightRow(0)
 	}
 }
 
@@ -323,34 +375,40 @@ func (nav *NaviTable) restoreAllItems() {
 	for i, item := range nav.items {
 		cell := tview.NewTableCell(item.data).
 			SetAlign(tview.AlignCenter).
-			SetBackgroundColor(tcell.ColorBlack)
+			SetBackgroundColor(panelBackgroundColor).
+			SetTextColor(mutedTextColor)
 		nav.table.SetCell(i, 0, cell)
 	}
 
 	// Reset current selection
 	nav.current = 0
 	if len(nav.items) > 0 {
-		nav.table.GetCell(0, 0).SetTextColor(tcell.ColorRed)
+		nav.highlightRow(0)
 	}
 }
 
-func CreateNavTable(app *tview.Application) *NaviTable {
+func CreateNavTable(app *tview.Application, pages *tview.Pages) *NaviTable {
 	// Create a table with borders
-	table := tview.NewTable().SetBorders(true)
-	table.SetBackgroundColor(tcell.ColorBlack)
+	table := tview.NewTable().
+		SetBorders(true).
+		SetBordersColor(accentBlueColor)
+	table.SetBackgroundColor(panelBackgroundColor)
 
 	// Create the help bar
-	helpBar := tview.NewTextView().
-		SetTextAlign(tview.AlignCenter).
-		SetText("↑/k: Up | ↓/j: Down | /: Search | Enter: Select | ?: Help | Esc: Exit")
+	helpBar := tview.NewTextView()
+	helpBar.SetTextAlign(tview.AlignCenter)
+	helpBar.SetDynamicColors(true)
+	helpBar.SetBackgroundColor(panelBackgroundColor)
+	helpBar.SetText(" [white]↑/k[-] Up   [white]↓/j[-] Down   [white]/[-] Search   [white]Enter[-] Open   [white]?[-] Help   [white]q/Esc[-] Exit")
 
 	// Create status bar to show git repository path
-	statusBar := tview.NewTextView().
-		SetTextAlign(tview.AlignCenter).
-		SetTextColor(tcell.ColorYellow)
+	statusBar := tview.NewTextView()
+	statusBar.SetTextAlign(tview.AlignCenter)
+	statusBar.SetDynamicColors(true)
+	statusBar.SetBackgroundColor(panelBackgroundColor)
 
 	// Set status message based on whether GIT_REPOS_PATH was set by environment variable
-	statusMessage := fmt.Sprintf("Git folder: %s", gitReposPath)
+	statusMessage := fmt.Sprintf("[#4682c8]Git folder:[-] %s", gitReposPath)
 	if os.Getenv("GIT_REPOS_PATH") == "" {
 		statusMessage += " (default)"
 	}
@@ -367,6 +425,8 @@ func CreateNavTable(app *tview.Application) *NaviTable {
 		table:         table,
 		flex:          flex,
 		helpBar:       helpBar,
+		statusBar:     statusBar,
+		pages:         pages,
 		app:           app,
 		items:         nil,
 		current:       0,
@@ -386,11 +446,12 @@ func (nav *NaviTable) AddItem(data string, callback func()) {
 	tabItem := TableItem{data, callback}
 	cell := tview.NewTableCell(data).
 		SetAlign(tview.AlignCenter).
-		SetBackgroundColor(tcell.ColorBlack)
+		SetBackgroundColor(panelBackgroundColor).
+		SetTextColor(mutedTextColor)
 	nav.items = append(nav.items, tabItem)
 	nav.table.SetCell(len(nav.items)-1, 0, cell)
 	if len(nav.items)-1 == 0 {
-		nav.table.GetCell(0, 0).SetTextColor(tcell.ColorRed)
+		nav.highlightRow(0)
 	}
 }
 
@@ -457,9 +518,10 @@ func OpenProject(name string) {
 func main() {
 	// Create a new application
 	app := tview.NewApplication()
+	pages := tview.NewPages()
 
 	// Create navigation table
-	navTable := CreateNavTable(app)
+	navTable := CreateNavTable(app, pages)
 
 	// Load projects and add them to the table
 	projects := GetProjects()
@@ -484,8 +546,10 @@ func main() {
 		app.Stop()
 	})
 
+	pages.AddPage("main", navTable.flex, true, true)
+
 	// Set up and start the application
-	if err := app.SetRoot(navTable.flex, true).SetFocus(navTable.flex).Run(); err != nil {
+	if err := app.SetRoot(pages, true).SetFocus(navTable.flex).Run(); err != nil {
 		panic(err)
 	}
 }
