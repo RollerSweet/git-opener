@@ -53,12 +53,10 @@ jobs:
             exit 0
           fi
 
-          echo "should_release=true" >> "$GITHUB_OUTPUT"
-          echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
           {
-            echo "release_notes<<'EOF'"
-            echo "$COMMIT_MESSAGE"
-            echo "EOF"
+            printf "should_release=true\n"
+            printf "bump=%s\n" "$BUMP"
+            printf "release_notes<<'EOF'\n%s\nEOF\n" "$COMMIT_MESSAGE"
           } >> "$GITHUB_OUTPUT"
 
       - name: Compute next version
